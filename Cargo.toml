@@ -2,3 +2,6 @@
 name = "stocks"
 version = "0.1.0"
 authors = ["BuildTools <magnus@puj.dk>"]
+
+[dependencies]
+rustc-serialize = "0.3.15"

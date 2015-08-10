@@ -1,11 +1,40 @@
+extern crate rustc_serialize;
+
 use std::str::FromStr;
 use std::collections::HashMap;
 use std::cmp::*;
+use rustc_serialize::json;
+use std::error::Error;
+use std::fs::File;
+use std::io::prelude::*;
+use std::path::Path;
 
 type Price = i64;
 
 fn main() {
-    println!("Hello, world!");
+
+    let path = Path::new("stock.txt");
+    let display = path.display();
+    
+    // Open the path in read-only mode, returns `io::Result<File>`
+    let mut file = match File::open(&path) {
+        // The `description` method of `io::Error` returns a string that
+        // describes the error
+        Err(why) => panic!("couldn't open {}: {}", display,
+                                                   Error::description(&why)),
+        Ok(file) => file,
+    };
+
+    // Read the file contents into a string, returns `io::Result<usize>`
+    let mut s = String::new();
+    match file.read_to_string(&mut s) {
+        Err(why) => panic!("couldn't read {}: {}", display,
+                                                   Error::description(&why)),
+        Ok(_) => print!("{} contains:\n{}", display, s),
+    }
+    let s = s;
+
+    let stock: Stock = json::decode(&s).unwrap();
 }
 
 // ----------------------------- //
@@ -36,30 +65,31 @@ impl Period {
 // STOCK
 // ----------------------------- //
 
-struct Stock<'a> {
-    dates: HashMap<&'a str, Price>
+#[derive(RustcDecodable, RustcEncodable)]
+struct Stock {
+    dates: HashMap<String, Price>
 }
 
-impl<'a> Stock<'a> {
-    fn new() -> Stock<'a> {
+impl Stock {
+    fn new() -> Stock {
         Stock { dates: HashMap::new() }
     }
 
-    fn get_by_str(&self, day: &str) -> Option<Price> {
-        self.dates.get(day).map(|p| p.clone())
-    }
     fn get_close_price(&self, day: Date) -> Option<Price> {
-        self.get_by_str(&day.to_string())
+        self.dates.get(&day.to_string()).map(|p| p.clone())
+    }
+    fn get_period_data(&self, from: Date, to: Date) -> Option<Period> {
+        if to < from { panic!(); }
+        let start = self.get_close_price(from);
+        let end = self.get_close_price(to);
+        if start.is_none() || end.is_none() {
+            None
+        } else {
+            Some(Period{start: start.unwrap().clone(), end: end.unwrap().clone()})
+        }
     }
     fn get_day_data(&self, day: Date) -> Option<Period> {
-        let open = self.get_close_price(day.prior_day());
-        let close = self.get_close_price(day);
-        if open.is_none() || close.is_none() {
-            None
-        }
-        else {
-            Some(Period{start: open.unwrap().clone(), end: close.unwrap().clone()})
-        }
+        self.get_period_data(day.prior_day(), day )
     }
 }
 
@@ -156,4 +186,31 @@ impl FromStr for Date {
         Ok(Date {year: year.unwrap(), month: month.unwrap(), day: day.unwrap()})
                 
     }
+}
+
+#[test]
+fn date_cmp() {
+    let d1 = Date {year: 2015, month: 1, day: 1};
+    let d2 = Date {year: 2014, month: 1, day: 1};
+    assert_eq!(d1.cmp(&d2), Ordering::Greater);
+
+    let d1 = Date {year: 2015, month: 1, day: 1};
+    let d2 = Date {year: 2014, month: 12, day: 1};
+    assert_eq!(d1.cmp(&d2), Ordering::Greater);
+
+    let d1 = Date {year: 2015, month: 1, day: 1};
+    let d2 = Date {year: 2014, month: 4, day: 30};
+    assert_eq!(d1.cmp(&d2), Ordering::Greater);
+
+    let d1 = Date {year: 2014, month: 1, day: 1};
+    let d2 = Date {year: 2014, month: 1, day: 12};
+    assert_eq!(d1.cmp(&d2), Ordering::Less);
+
+    let d1 = Date {year: 2015, month: 1, day: 1};
+    let d2 = Date {year: 2015, month: 1, day: 1};
+    assert_eq!(d1.cmp(&d2), Ordering::Equal);
+
+    let d1 = Date {year: 2014, month: 5, day: 1};
+    let d2 = Date {year: 2014, month: 3, day: 12};
+    assert_eq!(d1.cmp(&d2), Ordering::Greater);
 }
