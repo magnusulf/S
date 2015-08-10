@@ -8,57 +8,44 @@ use std::error::Error;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
+use std::io;
+use std::fs;
 
 type Price = i64;
 
 fn main() {
 
-    let path = Path::new("stock.txt");
-    let display = path.display();
-    
-    // Open the path in read-only mode, returns `io::Result<File>`
-    let mut file = match File::open(&path) {
-        // The `description` method of `io::Error` returns a string that
-        // describes the error
-        Err(why) => panic!("couldn't open {}: {}", display,
-                                                   Error::description(&why)),
-        Ok(file) => file,
-    };
-
-    // Read the file contents into a string, returns `io::Result<usize>`
-    let mut s = String::new();
-    match file.read_to_string(&mut s) {
-        Err(why) => panic!("couldn't read {}: {}", display,
-                                                   Error::description(&why)),
-        Ok(_) => print!("{} contains:\n{}", display, s),
+    loop {
+        let s = read_string();
+        if s.is_none() { break; }
+        let s = s.unwrap();
+        let inp = s.trim_right();
+        if (inp == "quit") { break; }
+        let path = Path::new(&inp);
+        if (fs::metadata(path).is_ok()) {
+            println!("File {} does not exist", inp);
+            break;
+        }
+        
     }
-    let s = s;
+}
 
-    let stock: Stock = json::decode(&s).unwrap();
+fn read_string() -> Option<String> {
+    let mut str = String::new();
+    io::stdin().read_line(&mut str).ok().map(|_| str)
 }
 
 // ----------------------------- //
 // PERIOD
 // ----------------------------- //
 
+#[derive(PartialEq, Eq, Hash, Clone, RustcEncodable, RustcDecodable)]
 struct Period {
     start: Price,
     end: Price,
-}
-
-impl Period {
-    fn change(&self) -> i64 {
-        self.end - self.start
-    }
-    fn increased(&self) -> bool {
-        0 < self.change()
-    }
-    fn decreased(&self) -> bool {
-        0 > self.change()
-    }
-    fn changed(&self) -> bool {
-        self.change() != 0
-    }
+    high: Price,
+    low: Price,
+    volume: i64,
 }
 
 // ----------------------------- //
@@ -67,7 +54,7 @@ impl Period {
 
 #[derive(RustcDecodable, RustcEncodable)]
 struct Stock {
-    dates: HashMap<String, Price>
+    dates: HashMap<String, Period>
 }
 
 impl Stock {
@@ -75,21 +62,21 @@ impl Stock {
         Stock { dates: HashMap::new() }
     }
 
-    fn get_close_price(&self, day: Date) -> Option<Price> {
+    fn get_day_data(&self, day: Date) -> Option<Period> {
         self.dates.get(&day.to_string()).map(|p| p.clone())
     }
     fn get_period_data(&self, from: Date, to: Date) -> Option<Period> {
-        if to < from { panic!(); }
-        let start = self.get_close_price(from);
-        let end = self.get_close_price(to);
-        if start.is_none() || end.is_none() {
-            None
-        } else {
-            Some(Period{start: start.unwrap().clone(), end: end.unwrap().clone()})
-        }
-    }
-    fn get_day_data(&self, day: Date) -> Option<Period> {
-        self.get_period_data(day.prior_day(), day )
+        if from >= to { panic!(); }
+        let days: Vec<_> = self.dates.iter()
+            .map(|t| (Date::from_str(&t.0).unwrap(), t.1))
+            .filter(|t| t.0 >= from && t.0 <= to).collect();
+        let low = days.iter().map(|t| t.1.low).min().unwrap();
+        let high = days.iter().map(|t| t.1.high).max().unwrap();
+        let start = self.get_day_data(from).map(|p| p.start);
+        let end = self.get_day_data(to).map(|p| p.end);
+        let volume = days.iter().map(|t| t.1.volume).fold(0, |sum, x| sum + x);
+        if start.is_none() || end.is_none() { None }
+        else { Some(Period{start: start.unwrap(), end: end.unwrap(), high: high, low: low, volume: volume}) }
     }
 }
 
@@ -97,7 +84,7 @@ impl Stock {
 // DATE
 // ----------------------------- //
 
-const MONTH_LENGTHS: [u32; 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+/*const MONTH_LENGTHS: [u32; 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 fn is_leap_year(year: u32) -> bool {
     if (year % 400) == 0 { true }
@@ -108,17 +95,17 @@ fn is_leap_year(year: u32) -> bool {
 fn get_month_length(year: u32, month: u32) -> u32 {
     if is_leap_year(year) && month == 2 { 29 }
     else { MONTH_LENGTHS[month as usize] }
-}
+}*/
 
 
-#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Clone)]
+#[derive(PartialOrd, Ord, PartialEq, Eq, Hash, Clone)]
 struct Date {
     year: u32,
     month: u32,
     day: u32,
 }
 
-impl Date {
+/*impl Date {
     fn is_last_in_month(&self) -> bool {
         self.day == get_month_length(self.year, self.month)
     }
@@ -155,18 +142,24 @@ impl Date {
         }
     }
     
-}
+}*/
 
 impl ToString for Date {
     fn to_string(&self) -> String {
         let mut ret = String::new();
         ret.push_str(&self.year.to_string());
         ret.push('-');
-        ret.push_str(&self.month.to_string());
+        ret.push_str(&to_iso_str(self.month));
         ret.push('-');
-        ret.push_str(&self.day.to_string());
+        ret.push_str(&to_iso_str(self.day));
         ret
     }
+}
+
+fn to_iso_str(i: u32) -> String {
+    let ret = i.to_string();
+    if (ret.len() > 1) { ret }
+    else {"0".to_string() + &ret}
 }
 
 impl FromStr for Date {
