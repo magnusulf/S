@@ -10,23 +10,140 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::io;
 use std::fs;
+use std::num::*;
 
 type Price = i64;
+const DIGITS: u32 = 2;
+static MULTIPLIER: f64 = 100;
 
 fn main() {
 
     loop {
-        let s = read_string();
-        if s.is_none() { break; }
-        let s = s.unwrap();
-        let inp = s.trim_right();
-        if (inp == "quit") { break; }
-        let path = Path::new(&inp);
-        if (fs::metadata(path).is_ok()) {
-            println!("File {} does not exist", inp);
-            break;
+
+        // Get input
+        let inp = read_string();
+
+        // Do check
+        if inp.is_none() {
+            continue;
         }
-        
+        let inp = inp.unwrap();
+
+        // We should not incude newline n stuff.
+        let inp = inp.trim();
+
+        // Make it possible to stop the program
+        if (inp == "quit") { break; }
+
+        // Get path
+        let path = Path::new(&inp);
+        let display = path.display();
+
+        // Only use existing directories
+        if ( ! fs::metadata(path).is_ok()) {
+            println!("File {} does not exist", display);
+            continue;
+        }
+
+        // So if it is in yahoos format
+        // Date,Open,High,Low,Close,Volume,Adj Close (unused)
+        if (inp.ends_with(".txt")) {
+            handle_txt(&path);
+        } else if (inp.ends_with(".json")) {
+
+        } else {
+            println!("File {} does not have a known format", display);
+            continue;
+        }
+    }
+}
+
+fn handle_txt(path: &Path) {
+
+    // Fetch data
+    let display = path.display();
+
+    // Get the file
+    let mut content  = String::new();
+    let file = File::open(&path);
+
+    // Handle error
+    if (file.is_err()) {
+        println!("Couldn't read {}: {}", display, Error::description(&file.err().unwrap()));
+        return;
+    }
+    let mut file = file.ok().unwrap();
+
+    // Get file contents
+    match file.read_to_string(&mut content) {
+        Err(why) => {
+            println!("Couldn't read {}: {}", display, Error::description(&why));
+            return;
+        },
+        Ok(_) => println!("Read {} successfully", display),
+    }
+
+    // Create stock
+    let mut stock = Stock::new();
+
+    // Loop over all the lines in the file contents
+    for line in content.lines() {
+
+        // Generate the different parts
+        let info: Vec<_> = line.split(",").collect();
+
+        // Simple error handling
+        if (info.len() != 7) {
+            println!("Invalid line: {}", line);
+            return;
+        }
+
+        // Fetch values from the line.
+        // Note: This will crash the whole program, if the
+        // file contents are invalid.
+        let day: Date = info[0].parse().ok().unwrap();
+        let open: f64 = info[1].parse().ok().unwrap();
+        let high: f64 = info[2].parse().ok().unwrap();
+        let low: f64 = info[3].parse().ok().unwrap();
+        let close: f64 = info[4].parse().ok().unwrap();
+        let volume: u64 = info[5].parse().ok().unwrap();
+
+        // Generate the day
+        let data = Period {
+            start: (open * MULTIPLIER) as Price,
+            high: (high * MULTIPLIER) as Price,
+            low: (low * MULTIPLIER) as Price,
+            end: (close * MULTIPLIER) as Price,
+            volume: volume,
+        };
+
+        // Use the data
+        stock.add_data(day, data);
+    }
+
+    // No more mutability
+    let stock = stock;
+    let encoded = json::encode(&stock);
+    let target = read_string();
+    if target.is_none() {
+        println!("Failed reading input");
+        return;
+    }
+    let target = target.unwrap();
+    let slice = target.trim_right();
+    let target = Path::new(&slice);
+    let display = target.display();
+    let out = File::create(&target);
+    if (out.is_err()) {
+        println!("Couldn't read {}: {}", target.display(), Error::description(&out.err().unwrap()));
+        return;
+    }
+    match out.ok().unwrap().write_all(encoded.ok().unwrap().as_bytes()) {
+        Err(why) => {
+            println!("Couldn't write to {}: {}", display, Error::description(&why));
+            return;
+        },
+        Ok(_) => println!("Successfully wrote to {}", display),
     }
 }
 
@@ -45,7 +162,7 @@ struct Period {
     end: Price,
     high: Price,
     low: Price,
-    volume: i64,
+    volume: u64,
 }
 
 // ----------------------------- //
@@ -60,6 +177,10 @@ struct Stock {
 impl Stock {
     fn new() -> Stock {
         Stock { dates: HashMap::new() }
+    }
+
+    fn add_data(&mut self, day: Date, data: Period) {
+        self.dates.insert(day.to_string(), data);
     }
 
     fn get_day_data(&self, day: Date) -> Option<Period> {
