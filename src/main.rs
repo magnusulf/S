@@ -9,15 +9,29 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 use std::io;
+use std::io::ErrorKind;
 use std::fs;
-use std::num::*;
 
 type Price = i64;
 const DIGITS: u32 = 2;
-static MULTIPLIER: f64 = 100;
+static MULTIPLIER: f64 = 100f64;
+const FOLDER: &'static str = "stocks";
 
 fn main() {
 
+    let mut stocks = Vec::new();
+    
+    if let Err(e) = load_basic(&mut stocks) {
+        println!("Error occured when loading files: {}", Error::description(&e));
+        return;
+        
+    }
+    let stocks = stocks;
+
+    for stock in stocks {
+        println!("{}", json::encode(&stock).unwrap());
+    }
+    
     loop {
 
         // Get input
@@ -33,58 +47,69 @@ fn main() {
         let inp = inp.trim();
 
         // Make it possible to stop the program
-        if (inp == "quit") { break; }
-
-        // Get path
-        let path = Path::new(&inp);
-        let display = path.display();
-
-        // Only use existing directories
-        if ( ! fs::metadata(path).is_ok()) {
-            println!("File {} does not exist", display);
-            continue;
-        }
-
-        // So if it is in yahoos format
-        // Date,Open,High,Low,Close,Volume,Adj Close (unused)
-        if (inp.ends_with(".txt")) {
-            handle_txt(&path);
-        } else if (inp.ends_with(".json")) {
-
-        } else {
-            println!("File {} does not have a known format", display);
-            continue;
-        }
+        if inp == "quit" { break; }
+        
     }
 }
 
-fn handle_txt(path: &Path) {
+fn load_basic(stocks: &mut Vec<Stock>) -> std::io::Result<()> {
+    let folder = Path::new(FOLDER);
+    let mut folderData = fs::metadata(folder);
+    if (folderData.is_err()) {
+        fs::create_dir(folder);
+        folderData = fs::metadata(folder);
+    }
+    let folderData = folderData.ok().unwrap();
 
-    // Fetch data
-    let display = path.display();
+    let files: Vec<_> = fs::read_dir(folder).unwrap().collect();
+    for file in files {
+        let file = file.unwrap();
+        if ! file.file_type().map(|t| t.is_file()).unwrap_or(false) { continue; }
 
+        let name = file.file_name();
+        let name = name.to_str().unwrap_or(&"");
+        let name = FOLDER.to_string() + "/" + name;
+        let path = Path::new(&name);
+        let display = path.display();
+        if name.ends_with(".txt") {
+            let mut stock = Stock::new();
+            
+            read_txt(&path, &mut stock);
+            
+            let newName = name[..name.len()-"txt".len()].to_string() + &"json";
+            let newPath = Path::new(&newName);
+            let mut file = File::create(newPath).unwrap();
+            file.write_all(json::encode(&stock).unwrap().as_bytes());
+
+            try!((fs::remove_file(path)))
+        } else if name.ends_with(".json") {
+            let mut stock = Stock::new();
+            try!(read_json(&path, &mut stock));
+            stocks.push(stock);
+        }
+
+    }
+    Ok(())
+}
+
+fn read_json(path: &Path, stock: &mut Stock) -> std::io::Result<()> {
     // Get the file
     let mut content  = String::new();
-    let file = File::open(&path);
+    let mut file = try!(File::open(&path));
+    try!(file.read_to_string(&mut content));
 
-    // Handle error
-    if (file.is_err()) {
-        println!("Couldn't read {}: {}", display, Error::description(&file.err().unwrap()));
-        return;
-    }
-    let mut file = file.ok().unwrap();
+    // Return
+    let ret: Stock = try!(json::decode(&content).or(invalid_data("Failed decoding json".to_string())));
+    stock.dates = ret.dates;
+    Ok(())
+    
+}
 
-    // Get file contents
-    match file.read_to_string(&mut content) {
-        Err(why) => {
-            println!("Couldn't read {}: {}", display, Error::description(&why));
-            return;
-        },
-        Ok(_) => println!("Read {} successfully", display),
-    }
-
-    // Create stock
-    let mut stock = Stock::new();
+fn read_txt(path: &Path, stock: &mut Stock) -> std::io::Result<()> {
+    // Get the file
+    let mut content  = String::new();
+    let mut file = try!(File::open(&path));
+    try!(file.read_to_string(&mut content));
 
     // Loop over all the lines in the file contents
     for line in content.lines() {
@@ -93,22 +118,24 @@ fn handle_txt(path: &Path) {
         let info: Vec<_> = line.split(",").collect();
 
         // Simple error handling
-        if (info.len() != 7) {
-            println!("Invalid line: {}", line);
-            return;
+        if info.len() != 7 {
+            return Err(io::Error::new(ErrorKind::InvalidData, format!("Invalid line: {}", line)));
         }
 
         // Fetch values from the line.
         // Note: This will crash the whole program, if the
         // file contents are invalid.
-        let day: Date = info[0].parse().ok().unwrap();
-        let open: f64 = info[1].parse().ok().unwrap();
-        let high: f64 = info[2].parse().ok().unwrap();
-        let low: f64 = info[3].parse().ok().unwrap();
-        let close: f64 = info[4].parse().ok().unwrap();
-        let volume: u64 = info[5].parse().ok().unwrap();
+        let day: Date = try!(info[0].parse().or(invalid_data(format!("Invalid date: {}", info[0]))));
+        let open: f64 = try!(info[1].parse().or(invalid_data(format!("Invalid f64: {}", info[1]))));
+        let high: f64 = try!(info[2].parse().or(invalid_data(format!("Invalid f64: {}", info[2]))));
+        let low: f64 = try!(info[3].parse().or(invalid_data(format!("Invalid f64: {}", info[3]))));
+        let close: f64 = try!(info[4].parse().or(invalid_data(format!("Invalid f64: {}", info[4]))));
+        let volume: u64 = try!(info[5].parse().or(invalid_data(format!("Invalid u64: {}", info[5]))));
 
         // Generate the day
+        // Note we multiply, to keep decimal places,
+        // and store it as integer value instead of a float value,
+        // for the sake of precisison.
         let data = Period {
             start: (open * MULTIPLIER) as Price,
             high: (high * MULTIPLIER) as Price,
@@ -120,7 +147,25 @@ fn handle_txt(path: &Path) {
         // Use the data
         stock.add_data(day, data);
     }
+    Ok(())
+}
 
+fn invalid_data<T>(msg: String) -> std::io::Result<T> {
+    Err(io::Error::new(ErrorKind::InvalidData, msg))
+}
+
+fn handle_txt(path: &Path) {
+
+    let mut stock = Stock::new();
+
+    match read_txt(path, &mut stock) {
+        Ok(_) => {},
+        Err(e) => {
+            println!("Could not load stock file {}: {}", path.display(), Error::description(&e));
+            return;
+        }
+    }
+    
     // No more mutability
     let stock = stock;
     let encoded = json::encode(&stock);
